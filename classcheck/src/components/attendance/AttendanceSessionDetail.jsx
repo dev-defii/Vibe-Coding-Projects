@@ -1,27 +1,30 @@
-import React, { useState, useMemo } from 'react';
-import { 
-  ArrowLeft, 
-  CalendarCheck2, 
-  Upload, 
-  Download, 
-  CheckCircle2, 
-  AlertCircle, 
-  Clock, 
-  Users, 
-  Search, 
-  X, 
-  ChevronDown, 
-  FileSpreadsheet, 
-  FileText, 
-  Sparkles, 
-  UserCheck, 
-  UserX, 
+import React, { useState, useMemo, useRef } from 'react';
+import {
+  ArrowLeft,
+  CalendarCheck2,
+  Upload,
+  Download,
+  CheckCircle2,
+  AlertCircle,
+  Clock,
+  Users,
+  Search,
+  X,
+  ChevronDown,
+  FileSpreadsheet,
+  FileText,
+  Sparkles,
+  UserCheck,
+  UserX,
   HelpCircle,
   AlertTriangle,
   RotateCcw,
-  Check
+  Check,
+  Shield,
+  Pencil,
 } from 'lucide-react';
 import ImportMeetModal from './ImportMeetModal.jsx';
+import DropdownMenu from '../common/DropdownMenu.jsx';
 import { matchParticipantsToRoster } from '../../services/attendanceMatchingService.js';
 import { exportAttendanceToExcel, exportAttendanceToCSV } from '../../services/spreadsheetService.js';
 
@@ -34,9 +37,17 @@ export default function AttendanceSessionDetail({
   onShowToast,
 }) {
   const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all'); // 'all' | 'present' | 'absent' | 'unreviewed'
+  const [statusFilter, setStatusFilter] = useState('all'); // 'all' | 'present' | 'absent' | 'unreviewed' | 'excused'
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [exportDropdownOpen, setExportDropdownOpen] = useState(false);
+  const exportTriggerRef = useRef(null);
+
+  // Excused reason modal state
+  const [excuseTarget, setExcuseTarget] = useState(null); // { studentId, studentName, currentReason }
+  const [excuseReason, setExcuseReason] = useState('');
+
+  // Reopen confirmation state
+  const [reopenConfirmOpen, setReopenConfirmOpen] = useState(false);
 
   // Class students enrolled in this session's class
   const classStudents = useMemo(() => {
@@ -75,6 +86,7 @@ export default function AttendanceSessionDetail({
     const totalEnrolled = currentRecords.length;
     const presentCount = currentRecords.filter((r) => r.status === 'present').length;
     const absentCount = currentRecords.filter((r) => r.status === 'absent').length;
+    const excusedCount = currentRecords.filter((r) => r.status === 'excused').length;
     const unreviewedCount = currentRecords.filter((r) => r.status === 'unreviewed').length;
     const attendanceRate = totalEnrolled > 0 ? Math.round((presentCount / totalEnrolled) * 100) : 0;
     const unmatchedCount = (session.unmatchedParticipants || []).length;
@@ -83,6 +95,7 @@ export default function AttendanceSessionDetail({
       totalEnrolled,
       presentCount,
       absentCount,
+      excusedCount,
       unreviewedCount,
       attendanceRate,
       unmatchedCount,
@@ -102,7 +115,8 @@ export default function AttendanceSessionDetail({
         const matchesName = r.studentName && r.studentName.toLowerCase().includes(q);
         const matchesId = r.studentId && r.studentId.toLowerCase().includes(q);
         const matchesNotes = r.notes && r.notes.toLowerCase().includes(q);
-        if (!matchesName && !matchesId && !matchesNotes) {
+        const matchesExcuse = r.excuseReason && r.excuseReason.toLowerCase().includes(q);
+        if (!matchesName && !matchesId && !matchesNotes && !matchesExcuse) {
           return false;
         }
       }
@@ -110,14 +124,86 @@ export default function AttendanceSessionDetail({
     });
   }, [currentRecords, statusFilter, searchQuery]);
 
-  // Handle single student status toggle
-  const handleSetStudentStatus = (studentId, newStatus) => {
+  // Build a normalized records array so stale excuse reasons are never exported
+  // (records that are not 'excused' lose their excuseReason field).
+  const exportRecords = useMemo(() => {
+    return currentRecords.map((r) => {
+      if (r.status !== 'excused') {
+        const { excuseReason, ...rest } = r;
+        return rest;
+      }
+      return r;
+    });
+  }, [currentRecords]);
+
+  // Helper: open the excuse reason modal
+  const openExcuseModal = (record) => {
+    setExcuseTarget({
+      studentId: record.studentId,
+      studentName: record.studentName,
+      currentReason: record.excuseReason || '',
+    });
+    setExcuseReason(record.excuseReason || '');
+  };
+
+  // Confirm the Excused status with a valid reason
+  const handleConfirmExcuse = () => {
+    if (!excuseTarget) return;
+    const trimmed = excuseReason.trim();
+    if (!trimmed) {
+      onShowToast?.('An excuse reason is required for Excused status.', 'warning');
+      return;
+    }
+    // Capture the student name before clearing state to avoid a stale closure
+    const studentName = excuseTarget.studentName;
     const updatedRecords = currentRecords.map((r) => {
-      if (r.studentId === studentId) {
+      if (r.studentId === excuseTarget.studentId) {
         return {
           ...r,
+          status: 'excused',
+          excuseReason: trimmed,
+          notes: `Excused: ${trimmed}`,
+        };
+      }
+      return r;
+    });
+    onUpdateSession({
+      ...session,
+      records: updatedRecords,
+      updatedAt: new Date().toISOString(),
+    });
+    setExcuseTarget(null);
+    setExcuseReason('');
+    onShowToast?.(`Marked ${studentName} as Excused.`, 'success');
+  };
+
+  // Cancel the excuse modal. No record changes were made before opening the
+  // modal, so simply closing it leaves every record in its original state.
+  const handleCancelExcuse = () => {
+    setExcuseTarget(null);
+    setExcuseReason('');
+  };
+
+  // Handle single student status toggle
+  const handleSetStudentStatus = (studentId, newStatus) => {
+    if (isFinalized) return;
+
+    if (newStatus === 'excused') {
+      const record = currentRecords.find((r) => r.studentId === studentId);
+      if (record) {
+        openExcuseModal(record);
+      }
+      return;
+    }
+
+    const updatedRecords = currentRecords.map((r) => {
+      if (r.studentId === studentId) {
+        const freshNotes = newStatus === r.status ? r.notes : `Manually set to ${newStatus}`;
+        const { excuseReason, ...rest } = r;
+        return {
+          ...rest,
           status: newStatus,
-          notes: newStatus === r.status ? r.notes : `Manually set to ${newStatus}`,
+          notes: freshNotes,
         };
       }
       return r;
@@ -132,10 +218,12 @@ export default function AttendanceSessionDetail({
 
   // Batch actions
   const handleMarkAllUnreviewedAbsent = () => {
+    if (isFinalized) return;
     const updatedRecords = currentRecords.map((r) => {
       if (r.status === 'unreviewed') {
+        const { excuseReason, ...rest } = r;
         return {
-          ...r,
+          ...rest,
           status: 'absent',
           notes: 'Marked absent during review',
         };
@@ -153,11 +241,15 @@ export default function AttendanceSessionDetail({
   };
 
   const handleMarkAllPresent = () => {
-    const updatedRecords = currentRecords.map((r) => ({
-      ...r,
-      status: 'present',
-      notes: 'Manually marked present in batch',
-    }));
+    if (isFinalized) return;
+    const updatedRecords = currentRecords.map((r) => {
+      const { excuseReason, ...rest } = r;
+      return {
+        ...rest,
+        status: 'present',
+        notes: 'Manually marked present in batch',
+      };
+    });
 
     onUpdateSession({
       ...session,
@@ -169,11 +261,15 @@ export default function AttendanceSessionDetail({
   };
 
   const handleResetToUnreviewed = () => {
-    const updatedRecords = currentRecords.map((r) => ({
-      ...r,
-      status: 'unreviewed',
-      notes: 'Reset to unreviewed',
-    }));
+    if (isFinalized) return;
+    const updatedRecords = currentRecords.map((r) => {
+      const { excuseReason, ...rest } = r;
+      return {
+        ...rest,
+        status: 'unreviewed',
+        notes: 'Reset to unreviewed',
+      };
+    });
 
     onUpdateSession({
       ...session,
@@ -190,8 +286,9 @@ export default function AttendanceSessionDetail({
     if (markRemainingAbsent) {
       recordsToSave = currentRecords.map((r) => {
         if (r.status === 'unreviewed') {
+          const { excuseReason, ...rest } = r;
           return {
-            ...r,
+            ...rest,
             status: 'absent',
             notes: 'Marked absent upon session finalization',
           };
@@ -316,7 +413,7 @@ export default function AttendanceSessionDetail({
       exportAttendanceToExcel(
         session,
         classObj,
-        currentRecords,
+        exportRecords,
         summary,
         session.unmatchedParticipants || []
       );
@@ -329,7 +426,7 @@ export default function AttendanceSessionDetail({
 
   const handleExportCSV = () => {
     try {
-      exportAttendanceToCSV(session, classObj, currentRecords);
+      exportAttendanceToCSV(session, classObj, exportRecords);
       onShowToast?.('Downloaded Attendance Report (.csv)', 'success');
       setExportDropdownOpen(false);
     } catch (err) {
@@ -338,6 +435,15 @@ export default function AttendanceSessionDetail({
   };
 
   const isFinalized = session.status === 'finalized';
+
+  const handleReopenClick = () => {
+    setReopenConfirmOpen(true);
+  };
+
+  const handleConfirmReopen = () => {
+    handleReopenSession();
+    setReopenConfirmOpen(false);
+  };
 
   return (
     <div className="container">
@@ -430,6 +536,7 @@ export default function AttendanceSessionDetail({
             {/* Export Dropdown */}
             <div style={{ position: 'relative' }}>
               <button
+                ref={exportTriggerRef}
                 type="button"
                 className="btn btn-secondary"
                 onClick={() => setExportDropdownOpen(!exportDropdownOpen)}
@@ -440,73 +547,62 @@ export default function AttendanceSessionDetail({
                 <ChevronDown size={14} />
               </button>
 
-              {exportDropdownOpen && (
-                <div
+              <DropdownMenu
+                triggerRef={exportTriggerRef}
+                isOpen={exportDropdownOpen}
+                onClose={() => setExportDropdownOpen(false)}
+                align="right"
+              >
+                <button
+                  type="button"
                   style={{
-                    position: 'absolute',
-                    right: 0,
-                    top: '100%',
-                    marginTop: '6px',
-                    backgroundColor: 'var(--white)',
-                    border: '1px solid var(--slate-200)',
-                    borderRadius: 'var(--radius-md)',
-                    boxShadow: 'var(--shadow-lg)',
-                    minWidth: '200px',
-                    zIndex: 50,
-                    padding: '6px',
+                    width: '100%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    padding: '9px 12px',
+                    border: 'none',
+                    background: 'none',
+                    borderRadius: 'var(--radius-sm)',
+                    fontSize: '0.88rem',
+                    fontWeight: 600,
+                    color: 'var(--slate-800)',
+                    cursor: 'pointer',
+                    textAlign: 'left',
                   }}
+                  onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--slate-100)')}
+                  onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                  onClick={handleExportExcel}
                 >
-                  <button
-                    type="button"
-                    style={{
-                      width: '100%',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px',
-                      padding: '9px 12px',
-                      border: 'none',
-                      background: 'none',
-                      borderRadius: 'var(--radius-sm)',
-                      fontSize: '0.88rem',
-                      fontWeight: 600,
-                      color: 'var(--slate-800)',
-                      cursor: 'pointer',
-                      textAlign: 'left',
-                    }}
-                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--slate-100)')}
-                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
-                    onClick={handleExportExcel}
-                  >
-                    <FileSpreadsheet size={16} color="#16a34a" />
-                    <span>Export as Excel (.xlsx)</span>
-                  </button>
+                  <FileSpreadsheet size={16} color="#16a34a" />
+                  <span>Export as Excel (.xlsx)</span>
+                </button>
 
-                  <button
-                    type="button"
-                    style={{
-                      width: '100%',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px',
-                      padding: '9px 12px',
-                      border: 'none',
-                      background: 'none',
-                      borderRadius: 'var(--radius-sm)',
-                      fontSize: '0.88rem',
-                      fontWeight: 600,
-                      color: 'var(--slate-800)',
-                      cursor: 'pointer',
-                      textAlign: 'left',
-                    }}
-                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--slate-100)')}
-                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
-                    onClick={handleExportCSV}
-                  >
-                    <FileText size={16} color="#2563eb" />
-                    <span>Export as CSV</span>
-                  </button>
-                </div>
-              )}
+                <button
+                  type="button"
+                  style={{
+                    width: '100%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    padding: '9px 12px',
+                    border: 'none',
+                    background: 'none',
+                    borderRadius: 'var(--radius-sm)',
+                    fontSize: '0.88rem',
+                    fontWeight: 600,
+                    color: 'var(--slate-800)',
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--slate-100)')}
+                  onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                  onClick={handleExportCSV}
+                >
+                  <FileText size={16} color="#2563eb" />
+                  <span>Export as CSV</span>
+                </button>
+              </DropdownMenu>
             </div>
 
             {/* Finalize / Reopen Controls */}
@@ -524,7 +620,7 @@ export default function AttendanceSessionDetail({
               <button
                 type="button"
                 className="btn btn-secondary"
-                onClick={handleReopenSession}
+                onClick={handleReopenClick}
                 title="Reopen session to make adjustments"
                 style={{ color: 'var(--slate-700)' }}
               >
@@ -590,6 +686,17 @@ export default function AttendanceSessionDetail({
             {summary.unreviewedCount}
           </div>
           <div style={{ fontSize: '0.8rem', color: 'var(--slate-500)' }}>Needs officer review</div>
+        </div>
+
+        {/* Excused */}
+        <div className="card" style={{ padding: '16px 20px', borderLeft: '4px solid #7c3aed' }}>
+          <div style={{ fontSize: '0.8rem', color: '#6d28d9', fontWeight: 700, textTransform: 'uppercase' }}>
+            EXCUSED
+          </div>
+          <div style={{ fontSize: '1.8rem', fontWeight: 800, color: '#6d28d9', marginTop: '2px' }}>
+            {summary.excusedCount}
+          </div>
+          <div style={{ fontSize: '0.8rem', color: 'var(--slate-500)' }}>Excused with reason</div>
         </div>
 
         {/* Unmatched Attendees */}
@@ -785,23 +892,24 @@ export default function AttendanceSessionDetail({
           {/* Filters & Bulk Mark Actions */}
           <div className="toolbar-actions">
             {/* Status Filter */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <label htmlFor="roster-status-filter" style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--slate-600)' }}>
-                Filter:
-              </label>
-              <select
-                id="roster-status-filter"
-                className="form-select"
-                style={{ minHeight: '38px', padding: '6px 12px', fontSize: '0.88rem' }}
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
-              >
-                <option value="all">All Students ({currentRecords.length})</option>
-                <option value="present">Present ({summary.presentCount})</option>
-                <option value="absent">Absent ({summary.absentCount})</option>
-                <option value="unreviewed">Unreviewed ({summary.unreviewedCount})</option>
-              </select>
-            </div>
+<div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <label htmlFor="roster-status-filter" style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--slate-600)' }}>
+                    Filter:
+                  </label>
+                  <select
+                    id="roster-status-filter"
+                    className="form-select"
+                    style={{ minHeight: '38px', padding: '6px 12px', fontSize: '0.88rem' }}
+                    value={statusFilter}
+                    onChange={(e) => setStatusFilter(e.target.value)}
+                  >
+                    <option value="all">All Students ({currentRecords.length})</option>
+                    <option value="present">Present ({summary.presentCount})</option>
+                    <option value="absent">Absent ({summary.absentCount})</option>
+                    <option value="excused">Excused ({summary.excusedCount})</option>
+                    <option value="unreviewed">Unreviewed ({summary.unreviewedCount})</option>
+                  </select>
+                </div>
 
             {/* Quick Bulk Marking Controls */}
             {!isFinalized && (
@@ -858,6 +966,7 @@ export default function AttendanceSessionDetail({
                   {filteredRecords.map((record, index) => {
                     const isPresent = record.status === 'present';
                     const isAbsent = record.status === 'absent';
+                    const isExcused = record.status === 'excused';
                     const isUnreviewed = record.status === 'unreviewed';
 
                     // Avatar initials
@@ -872,7 +981,9 @@ export default function AttendanceSessionDetail({
                           backgroundColor: isPresent 
                             ? 'rgba(240, 253, 244, 0.4)' 
                             : isAbsent 
-                            ? 'rgba(254, 242, 242, 0.4)' 
+                            ? 'rgba(254, 242, 242, 0.4)'
+                            : isExcused
+                            ? 'rgba(245, 243, 255, 0.5)'
                             : 'transparent'
                         }}
                       >
@@ -960,6 +1071,24 @@ export default function AttendanceSessionDetail({
                             >
                               Unreviewed
                             </button>
+
+                            <button
+                              type="button"
+                              style={{
+                                padding: '5px 12px',
+                                border: 'none',
+                                borderRadius: 'var(--radius-sm)',
+                                fontSize: '0.82rem',
+                                fontWeight: 700,
+                                cursor: 'pointer',
+                                transition: 'all 0.15s',
+                                backgroundColor: isExcused ? '#7c3aed' : 'transparent',
+                                color: isExcused ? 'var(--white)' : 'var(--slate-600)',
+                              }}
+                              onClick={() => handleSetStudentStatus(record.studentId, 'excused')}
+                            >
+                              Excused
+                            </button>
                           </div>
                         </td>
                         <td>
@@ -972,6 +1101,11 @@ export default function AttendanceSessionDetail({
                             {isAbsent && (
                               <span style={{ color: 'var(--danger-700)', fontWeight: 600 }}>
                                 {record.notes || 'Marked absent'}
+                              </span>
+                            )}
+                            {isExcused && (
+                              <span style={{ color: '#6d28d9', fontWeight: 600 }}>
+                                {record.excuseReason || 'Excused'}
                               </span>
                             )}
                             {isUnreviewed && (
@@ -1000,6 +1134,113 @@ export default function AttendanceSessionDetail({
           session={session}
           onProcessImport={handleProcessImport}
         />
+      )}
+
+      {/* Reopen Confirmation Modal */}
+      {reopenConfirmOpen && (
+        <div className="modal-backdrop" onClick={() => setReopenConfirmOpen(false)} role="dialog" aria-modal="true" aria-labelledby="reopen-modal-title">
+          <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <span style={{ color: 'var(--blue-600)' }}>
+                  <AlertTriangle size={24} />
+                </span>
+                <div>
+                  <h2 id="reopen-modal-title" className="modal-title">
+                    Reopen Attendance Session?
+                  </h2>
+                </div>
+              </div>
+              <button type="button" className="modal-close-btn" onClick={() => setReopenConfirmOpen(false)} aria-label="Close modal">
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="modal-body">
+              <div className="confirm-dialog-content">
+                <div className="confirm-icon-box">
+                  <AlertTriangle size={26} />
+                </div>
+                <div className="confirm-text-group">
+                  <p className="confirm-description">
+                    This will set the session status back to <strong>In Review (Draft)</strong>. You will be able to edit attendance statuses again until you finalize the session once more.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="modal-footer">
+              <button type="button" className="btn btn-secondary" onClick={() => setReopenConfirmOpen(false)}>
+                Cancel
+              </button>
+              <button type="button" className="btn btn-primary" onClick={handleConfirmReopen}>
+                <RotateCcw size={15} />
+                <span>Reopen Session</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Excused Reason Modal */}
+      {excuseTarget && (
+        <div className="modal-backdrop" onClick={handleCancelExcuse} role="dialog" aria-modal="true" aria-labelledby="excuse-modal-title">
+          <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <span style={{ color: '#7c3aed' }}>
+                  <Shield size={24} />
+                </span>
+                <div>
+                  <h2 id="excuse-modal-title" className="modal-title">
+                    Mark Student as Excused
+                  </h2>
+                  <div style={{ fontSize: '0.82rem', color: 'var(--slate-500)', marginTop: '2px' }}>
+                    {excuseTarget.studentName}
+                  </div>
+                </div>
+              </div>
+              <button type="button" className="modal-close-btn" onClick={handleCancelExcuse} aria-label="Close modal">
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="modal-body">
+              <div className="form-group">
+                <label htmlFor="excuse-reason-input" className="form-label">
+                  Excuse Reason / Note <span className="required">*</span>
+                </label>
+                <textarea
+                  id="excuse-reason-input"
+                  className="form-textarea"
+                  rows={3}
+                  placeholder="e.g. Doctor's appointment, family emergency, approved field trip..."
+                  value={excuseReason}
+                  onChange={(e) => setExcuseReason(e.target.value)}
+                  autoFocus
+                />
+                <div className="form-helper">
+                  A non-empty reason is required. This text will be stored with the record and shown in the notes column.
+                </div>
+              </div>
+            </div>
+
+            <div className="modal-footer">
+              <button type="button" className="btn btn-secondary" onClick={handleCancelExcuse}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={handleConfirmExcuse}
+                disabled={!excuseReason.trim()}
+              >
+                <Check size={16} />
+                <span>Confirm Excused</span>
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

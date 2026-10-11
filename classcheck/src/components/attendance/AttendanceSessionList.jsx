@@ -234,6 +234,7 @@ export default function AttendanceSessionList({
 
             const presentCount = (s.records || []).filter((r) => r.status === 'present').length;
             const absentCount = (s.records || []).filter((r) => r.status === 'absent').length;
+            const excusedCount = (s.records || []).filter((r) => r.status === 'excused').length;
             const unreviewedCount = (s.records || []).filter((r) => r.status === 'unreviewed').length;
             const isFinalized = s.status === 'finalized';
 
@@ -292,7 +293,7 @@ export default function AttendanceSessionList({
                   </div>
 
                   {/* Attendance Stat Summary Pill */}
-                  <div className="class-card-stats" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', textAlign: 'center' }}>
+                  <div className="class-card-stats" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '8px', textAlign: 'center' }}>
                     <div>
                       <div style={{ fontSize: '0.75rem', color: 'var(--slate-500)', fontWeight: 600 }}>PRESENT</div>
                       <div style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--success-700)' }}>{presentCount}</div>
@@ -300,6 +301,10 @@ export default function AttendanceSessionList({
                     <div>
                       <div style={{ fontSize: '0.75rem', color: 'var(--slate-500)', fontWeight: 600 }}>ABSENT</div>
                       <div style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--danger-700)' }}>{absentCount}</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--slate-500)', fontWeight: 600 }}>EXCUSED</div>
+                      <div style={{ fontSize: '1.15rem', fontWeight: 800, color: '#6d28d9' }}>{excusedCount}</div>
                     </div>
                     <div>
                       <div style={{ fontSize: '0.75rem', color: 'var(--slate-500)', fontWeight: 600 }}>UNREVIEWED</div>

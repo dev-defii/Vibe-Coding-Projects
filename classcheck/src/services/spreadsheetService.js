@@ -84,6 +84,7 @@ export function exportAttendanceToExcel(session, classInfo, records = [], summar
   const totalEnrolled = records.length;
   const presentCount = records.filter(r => r.status === 'present').length;
   const absentCount = records.filter(r => r.status === 'absent').length;
+  const excusedCount = records.filter(r => r.status === 'excused').length;
   const unreviewedCount = records.filter(r => r.status === 'unreviewed').length;
   const attendanceRate = totalEnrolled > 0 ? Math.round((presentCount / totalEnrolled) * 100) : 0;
 
@@ -103,24 +104,29 @@ export function exportAttendanceToExcel(session, classInfo, records = [], summar
     ['Total Enrolled Students:', totalEnrolled],
     ['Present Students:', `${presentCount} (${attendanceRate}%)`],
     ['Absent Students:', absentCount],
+    ['Excused Students:', excusedCount],
     ['Unreviewed Students:', unreviewedCount],
     ['Unmatched Attendees from Meet:', unmatchedParticipants.length],
     [''],
-    ['#', 'Student ID', 'Student Full Name', 'Attendance Status', 'Match Details / Notes']
+    ['#', 'Student ID', 'Student Full Name', 'Attendance Status', 'Match Details / Notes', 'Excuse Reason']
   ];
 
   // Append all students in roster
   records.forEach((r, idx) => {
     const statusLabel =
       r.status === 'present' ? 'PRESENT' :
-      r.status === 'absent' ? 'ABSENT' : 'UNREVIEWED';
+      r.status === 'absent' ? 'ABSENT' :
+      r.status === 'excused' ? 'EXCUSED' : 'UNREVIEWED';
+
+    const excuse = r.status === 'excused' ? (r.excuseReason || '') : '';
 
     reportRows.push([
       idx + 1,
       r.studentId || '',
       r.studentName || '',
       statusLabel,
-      r.notes || (r.matchedParticipantName ? `Matched: ${r.matchedParticipantName}` : '')
+      r.notes || (r.matchedParticipantName ? `Matched: ${r.matchedParticipantName}` : ''),
+      excuse
     ]);
   });
 
@@ -132,6 +138,7 @@ export function exportAttendanceToExcel(session, classInfo, records = [], summar
     { wch: 34 },  // Full Name
     { wch: 20 },  // Status
     { wch: 38 },  // Notes
+    { wch: 32 },  // Excuse Reason
   ];
 
   const workbook = XLSX.utils.book_new();
@@ -183,24 +190,28 @@ export function exportAttendanceToCSV(session, classInfo, records = []) {
   const totalEnrolled = records.length;
   const presentCount = records.filter(r => r.status === 'present').length;
   const absentCount = records.filter(r => r.status === 'absent').length;
+  const excusedCount = records.filter(r => r.status === 'excused').length;
   const unreviewedCount = records.filter(r => r.status === 'unreviewed').length;
 
   const csvRows = [
     ['ClassCheck — Attendance Report'],
     [`Class: ${className}`, `Section: ${section}`, `Subject: ${subject}`],
     [`Session: ${sessionTitle}`, `Date: ${meetingDate}`, `Status: ${session.status}`],
-    [`Summary: Total=${totalEnrolled}`, `Present=${presentCount}`, `Absent=${absentCount}`, `Unreviewed=${unreviewedCount}`],
+    [`Summary: Total=${totalEnrolled}`, `Present=${presentCount}`, `Absent=${absentCount}`, `Excused=${excusedCount}`, `Unreviewed=${unreviewedCount}`],
     [''],
-    ['#', 'Student ID', 'Full Name', 'Attendance Status', 'Notes']
+    ['#', 'Student ID', 'Full Name', 'Attendance Status', 'Notes', 'Excuse Reason']
   ];
 
   records.forEach((r, idx) => {
+    const statusLabel = r.status ? r.status.toUpperCase() : 'UNREVIEWED';
+    const excuse = r.status === 'excused' ? (r.excuseReason || '') : '';
     csvRows.push([
       idx + 1,
       r.studentId || '',
       r.studentName || '',
-      r.status.toUpperCase(),
-      r.notes || ''
+      statusLabel,
+      r.notes || '',
+      excuse
     ]);
   });
 
