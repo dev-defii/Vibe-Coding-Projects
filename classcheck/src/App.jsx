@@ -7,6 +7,9 @@ import ClassModal from './components/classes/ClassModal.jsx';
 import StudentRoster from './components/students/StudentRoster.jsx';
 import StudentModal from './components/students/StudentModal.jsx';
 import BulkStudentModal from './components/students/BulkStudentModal.jsx';
+import AttendanceSessionList from './components/attendance/AttendanceSessionList.jsx';
+import AttendanceSessionDetail from './components/attendance/AttendanceSessionDetail.jsx';
+import SessionModal from './components/attendance/SessionModal.jsx';
 import SettingsView from './components/settings/SettingsView.jsx';
 import ConfirmModal from './components/common/ConfirmModal.jsx';
 import Toast from './components/common/Toast.jsx';
@@ -18,7 +21,7 @@ export default function App() {
   const [students, setStudents] = useState(() => storageService.getStudents());
   const [sessions, setSessions] = useState(() => storageService.getSessions());
 
-  // Navigation view: 'dashboard' | 'classes' | 'students' | 'settings'
+  // Navigation view: 'dashboard' | 'classes' | 'students' | 'attendance' | 'session-detail' | 'settings'
   const [currentView, setCurrentView] = useState('dashboard');
 
   // Currently focused class for Student Roster view
@@ -26,6 +29,9 @@ export default function App() {
     const existing = storageService.getClasses();
     return existing.length > 0 ? existing[0].id : null;
   });
+
+  // Active attendance session ID for 'session-detail' view
+  const [activeSessionId, setActiveSessionId] = useState(null);
 
   // Modal states
   const [isClassModalOpen, setIsClassModalOpen] = useState(false);
@@ -37,6 +43,10 @@ export default function App() {
 
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
   const [bulkTargetClassId, setBulkTargetClassId] = useState(null);
+
+  const [isSessionModalOpen, setIsSessionModalOpen] = useState(false);
+  const [editingSession, setEditingSession] = useState(null);
+  const [sessionTargetClassId, setSessionTargetClassId] = useState(null);
 
   // Confirmation modal state
   const [confirmConfig, setConfirmConfig] = useState({
@@ -83,6 +93,9 @@ export default function App() {
       ? selectedClassId
       : classes[0]?.id || null;
 
+  // Active session object
+  const activeSession = sessions.find((s) => s.id === activeSessionId) || null;
+
   // ---------------- CLASS HANDLERS ---------------- //
   const handleOpenCreateClass = () => {
     setEditingClass(null);
@@ -109,23 +122,33 @@ export default function App() {
 
   const handleDeleteClass = (classItem) => {
     const enrolledStudents = students.filter((s) => s.classId === classItem.id);
+    const relatedSessions = sessions.filter((s) => s.classId === classItem.id);
     const count = enrolledStudents.length;
+
+    let confirmMsg = `Are you sure you want to delete "${classItem.name}"?`;
+    if (count > 0 || relatedSessions.length > 0) {
+      confirmMsg = `Are you sure you want to delete this class? This will also remove ${count} enrolled student${
+        count === 1 ? '' : 's'
+      } and ${relatedSessions.length} attendance session${
+        relatedSessions.length === 1 ? '' : 's'
+      }. This action cannot be undone.`;
+    }
 
     setConfirmConfig({
       isOpen: true,
       title: `Delete Class: ${classItem.name}?`,
-      message:
-        count > 0
-          ? `Are you sure you want to delete this class? This will also remove ${count} enrolled student${
-              count === 1 ? '' : 's'
-            } from this class roster. This action cannot be undone.`
-          : `Are you sure you want to delete "${classItem.name}"? This action cannot be undone.`,
+      message: confirmMsg,
       confirmText: 'Delete Class',
       confirmVariant: 'danger',
       requireTypedText: '',
       onConfirm: () => {
         setClasses((prev) => prev.filter((c) => c.id !== classItem.id));
         setStudents((prev) => prev.filter((s) => s.classId !== classItem.id));
+        setSessions((prev) => prev.filter((s) => s.classId !== classItem.id));
+        if (activeSession && activeSession.classId === classItem.id) {
+          setActiveSessionId(null);
+          setCurrentView('classes');
+        }
         setConfirmConfig((prev) => ({ ...prev, isOpen: false }));
         showToast(`Class "${classItem.name}" deleted.`, 'danger');
       },
@@ -252,6 +275,83 @@ export default function App() {
     showToast(`Successfully added ${newStudents.length} students to the roster!`, 'success');
   };
 
+  // ---------------- ATTENDANCE SESSION HANDLERS ---------------- //
+  const handleOpenCreateSession = (classId = null) => {
+    if (classes.length === 0) {
+      handleOpenCreateClass();
+      showToast('Please create a class first.', 'warning');
+      return;
+    }
+    setSessionTargetClassId(classId || activeSelectedClassId || classes[0].id);
+    setEditingSession(null);
+    setIsSessionModalOpen(true);
+  };
+
+  const handleSaveSession = (sessionData) => {
+    if (editingSession) {
+      setSessions((prev) =>
+        prev.map((s) => (s.id === sessionData.id ? sessionData : s))
+      );
+      showToast('Attendance session updated.', 'success');
+    } else {
+      // Initialize records for all students currently in that class
+      const classEnrollment = students.filter((stu) => stu.classId === sessionData.classId);
+      const initialRecords = classEnrollment.map((stu) => ({
+        studentId: stu.studentId,
+        studentInternalId: stu.id,
+        studentName: stu.fullName,
+        status: 'unreviewed',
+        matchType: 'none',
+        matchedParticipantName: '',
+        matchConfidence: 0,
+        notes: 'Not found in Meet import',
+        reviewWarning: null,
+        meetingDetails: null,
+      }));
+
+      const newSessionWithRecords = {
+        ...sessionData,
+        records: initialRecords,
+      };
+
+      setSessions((prev) => [newSessionWithRecords, ...prev]);
+      setActiveSessionId(newSessionWithRecords.id);
+      setCurrentView('session-detail');
+      showToast('Attendance session created.', 'success');
+    }
+  };
+
+  const handleOpenSessionDetail = (sessionId) => {
+    setActiveSessionId(sessionId);
+    setCurrentView('session-detail');
+  };
+
+  const handleUpdateSession = (updatedSession) => {
+    setSessions((prev) =>
+      prev.map((s) => (s.id === updatedSession.id ? updatedSession : s))
+    );
+  };
+
+  const handleDeleteSession = (sessionItem) => {
+    setConfirmConfig({
+      isOpen: true,
+      title: `Delete Session: ${sessionItem.title || sessionItem.date}?`,
+      message: `Are you sure you want to delete this session? All attendance marks and matched participant logs for this date will be permanently deleted. This action cannot be undone.`,
+      confirmText: 'Delete Session',
+      confirmVariant: 'danger',
+      requireTypedText: '',
+      onConfirm: () => {
+        setSessions((prev) => prev.filter((s) => s.id !== sessionItem.id));
+        if (activeSessionId === sessionItem.id) {
+          setActiveSessionId(null);
+          setCurrentView('attendance');
+        }
+        setConfirmConfig((prev) => ({ ...prev, isOpen: false }));
+        showToast('Attendance session deleted.', 'danger');
+      },
+    });
+  };
+
   // ---------------- DEMO & RESET DATA ---------------- //
   const handleLoadSampleData = () => {
     const sample = storageService.loadSampleData();
@@ -259,14 +359,14 @@ export default function App() {
     setStudents(sample.students);
     setSessions(sample.sessions);
     setSelectedClassId(sample.classes[0].id);
-    showToast('Loaded 3 sample classes and 17 students.', 'success');
+    showToast('Loaded 3 sample classes, 17 students, and a demo attendance session.', 'success');
   };
 
   const handleRequestResetData = () => {
     setConfirmConfig({
       isOpen: true,
       title: 'Erase All Application Data?',
-      message: `Resetting will permanently delete all ${classes.length} saved course(s), ${students.length} enrolled student record(s), and attendance sessions from this computer. This action cannot be reversed.`,
+      message: `Resetting will permanently delete all ${classes.length} saved course(s), ${students.length} enrolled student record(s), and ${sessions.length} attendance session(s) from this computer. This action cannot be reversed.`,
       confirmText: 'Permanently Erase All Data',
       confirmVariant: 'danger',
       requireTypedText: 'RESET',
@@ -276,6 +376,7 @@ export default function App() {
         setStudents(cleared.students);
         setSessions(cleared.sessions);
         setSelectedClassId(null);
+        setActiveSessionId(null);
         setConfirmConfig((prev) => ({ ...prev, isOpen: false }));
         showToast('All local data has been permanently cleared.', 'warning');
       },
@@ -299,6 +400,7 @@ export default function App() {
         setCurrentView={setCurrentView}
         classesCount={classes.length}
         studentsCount={students.length}
+        sessionsCount={sessions.length}
         onOpenCreateClass={handleOpenCreateClass}
         onLoadSampleData={handleLoadSampleData}
         hasData={classes.length > 0}
@@ -347,6 +449,30 @@ export default function App() {
           />
         )}
 
+        {currentView === 'attendance' && (
+          <AttendanceSessionList
+            sessions={sessions}
+            classes={classes}
+            students={students}
+            onOpenCreateSession={handleOpenCreateSession}
+            onOpenSessionDetail={handleOpenSessionDetail}
+            onDeleteSession={handleDeleteSession}
+            onOpenCreateClass={handleOpenCreateClass}
+            onLoadSampleData={handleLoadSampleData}
+          />
+        )}
+
+        {currentView === 'session-detail' && activeSession && (
+          <AttendanceSessionDetail
+            session={activeSession}
+            classObj={classes.find((c) => c.id === activeSession.classId)}
+            students={students}
+            onUpdateSession={handleUpdateSession}
+            onBack={() => setCurrentView('attendance')}
+            onShowToast={showToast}
+          />
+        )}
+
         {currentView === 'settings' && (
           <SettingsView
             classesCount={classes.length}
@@ -389,6 +515,19 @@ export default function App() {
           onSaveBulk={handleSaveBulkStudents}
           currentClass={activeClassForBulkModal}
           existingStudents={students}
+        />
+      )}
+
+      {isSessionModalOpen && (
+        <SessionModal
+          key={editingSession ? editingSession.id : 'new-session'}
+          isOpen={isSessionModalOpen}
+          onClose={() => setIsSessionModalOpen(false)}
+          onSave={handleSaveSession}
+          classes={classes}
+          initialClassId={sessionTargetClassId}
+          editingSession={editingSession}
+          existingSessions={sessions}
         />
       )}
 

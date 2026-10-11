@@ -1,5 +1,5 @@
 // Spreadsheet service for ClassCheck
-// Uses the xlsx library to import and export rosters in Excel (.xlsx) and CSV formats
+// Uses the xlsx library to import and export rosters and attendance reports in Excel (.xlsx) and CSV formats
 
 import * as XLSX from 'xlsx';
 
@@ -68,8 +68,158 @@ export function exportRosterToCSV(classInfo, students) {
 }
 
 /**
- * Parses an uploaded Excel (.xlsx, .xls) or CSV file
- * Returns an array of parsed student objects { studentId, fullName }
+ * Exports an Attendance Session Report to Excel (.xlsx)
+ * Includes metadata header, summary statistics, complete class roster with attendance statuses,
+ * and an unmatched participants sheet if attendees were not in the roster.
+ */
+export function exportAttendanceToExcel(session, classInfo, records = [], summary = {}, unmatchedParticipants = []) {
+  const className = classInfo?.name || session.className || 'Class';
+  const section = classInfo?.section || session.section || 'Section';
+  const subject = classInfo?.subject || session.subject || 'Subject';
+  const sessionTitle = session.title || 'Attendance Session';
+  const meetingDate = session.date || new Date().toISOString().split('T')[0];
+  const isFinalized = session.status === 'finalized';
+
+  // Calculate totals
+  const totalEnrolled = records.length;
+  const presentCount = records.filter(r => r.status === 'present').length;
+  const absentCount = records.filter(r => r.status === 'absent').length;
+  const unreviewedCount = records.filter(r => r.status === 'unreviewed').length;
+  const attendanceRate = totalEnrolled > 0 ? Math.round((presentCount / totalEnrolled) * 100) : 0;
+
+  // Build sheet rows manually for professional report styling
+  const reportRows = [
+    ['ClassCheck — Official Attendance Report'],
+    [''],
+    ['Course / Class:', className],
+    ['Section:', section],
+    ['Subject Code:', subject],
+    ['Session Title:', sessionTitle],
+    ['Meeting Date:', meetingDate],
+    ['Status:', isFinalized ? 'FINALIZED' : 'IN REVIEW (DRAFT)'],
+    ['Exported On:', new Date().toLocaleString()],
+    [''],
+    ['ATTENDANCE SUMMARY'],
+    ['Total Enrolled Students:', totalEnrolled],
+    ['Present Students:', `${presentCount} (${attendanceRate}%)`],
+    ['Absent Students:', absentCount],
+    ['Unreviewed Students:', unreviewedCount],
+    ['Unmatched Attendees from Meet:', unmatchedParticipants.length],
+    [''],
+    ['#', 'Student ID', 'Student Full Name', 'Attendance Status', 'Match Details / Notes']
+  ];
+
+  // Append all students in roster
+  records.forEach((r, idx) => {
+    const statusLabel =
+      r.status === 'present' ? 'PRESENT' :
+      r.status === 'absent' ? 'ABSENT' : 'UNREVIEWED';
+
+    reportRows.push([
+      idx + 1,
+      r.studentId || '',
+      r.studentName || '',
+      statusLabel,
+      r.notes || (r.matchedParticipantName ? `Matched: ${r.matchedParticipantName}` : '')
+    ]);
+  });
+
+  const worksheet = XLSX.utils.aoa_to_sheet(reportRows);
+
+  worksheet['!cols'] = [
+    { wch: 6 },   // #
+    { wch: 18 },  // Student ID
+    { wch: 34 },  // Full Name
+    { wch: 20 },  // Status
+    { wch: 38 },  // Notes
+  ];
+
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'Attendance Report');
+
+  // If there are unmatched participants from the Meet import, add a dedicated sheet
+  if (unmatchedParticipants && unmatchedParticipants.length > 0) {
+    const unmatchedRows = [
+      ['Unmatched Google Meet Attendees (Not Enrolled in Class Roster)'],
+      [''],
+      ['#', 'Attendee Name from File', 'Email / Account', 'Duration / Join Info', 'Occurrences in Call Log']
+    ];
+
+    unmatchedParticipants.forEach((p, idx) => {
+      unmatchedRows.push([
+        idx + 1,
+        p.originalName || '',
+        p.email || 'N/A',
+        p.duration || 'N/A',
+        p.count || 1
+      ]);
+    });
+
+    const unmatchedSheet = XLSX.utils.aoa_to_sheet(unmatchedRows);
+    unmatchedSheet['!cols'] = [
+      { wch: 6 },
+      { wch: 32 },
+      { wch: 28 },
+      { wch: 20 },
+      { wch: 22 }
+    ];
+    XLSX.utils.book_append_sheet(workbook, unmatchedSheet, 'Unmatched Attendees');
+  }
+
+  const filename = `${sanitizeFilename(subject)}_${sanitizeFilename(section)}_${sanitizeFilename(meetingDate)}_Attendance.xlsx`;
+  XLSX.writeFile(workbook, filename);
+}
+
+/**
+ * Exports an Attendance Session Report to CSV
+ */
+export function exportAttendanceToCSV(session, classInfo, records = []) {
+  const className = classInfo?.name || session.className || 'Class';
+  const section = classInfo?.section || session.section || 'Section';
+  const subject = classInfo?.subject || session.subject || 'Subject';
+  const sessionTitle = session.title || 'Attendance Session';
+  const meetingDate = session.date || new Date().toISOString().split('T')[0];
+
+  const totalEnrolled = records.length;
+  const presentCount = records.filter(r => r.status === 'present').length;
+  const absentCount = records.filter(r => r.status === 'absent').length;
+  const unreviewedCount = records.filter(r => r.status === 'unreviewed').length;
+
+  const csvRows = [
+    ['ClassCheck — Attendance Report'],
+    [`Class: ${className}`, `Section: ${section}`, `Subject: ${subject}`],
+    [`Session: ${sessionTitle}`, `Date: ${meetingDate}`, `Status: ${session.status}`],
+    [`Summary: Total=${totalEnrolled}`, `Present=${presentCount}`, `Absent=${absentCount}`, `Unreviewed=${unreviewedCount}`],
+    [''],
+    ['#', 'Student ID', 'Full Name', 'Attendance Status', 'Notes']
+  ];
+
+  records.forEach((r, idx) => {
+    csvRows.push([
+      idx + 1,
+      r.studentId || '',
+      r.studentName || '',
+      r.status.toUpperCase(),
+      r.notes || ''
+    ]);
+  });
+
+  const worksheet = XLSX.utils.aoa_to_sheet(csvRows);
+  const csvContent = XLSX.utils.sheet_to_csv(worksheet);
+
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.setAttribute('href', url);
+  link.setAttribute('download', `${sanitizeFilename(subject)}_${sanitizeFilename(section)}_${sanitizeFilename(meetingDate)}_Attendance.csv`);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Parses an uploaded Excel (.xlsx, .xls) or CSV file for student rosters
  */
 export async function parseSpreadsheetFile(file) {
   return new Promise((resolve, reject) => {
@@ -132,7 +282,6 @@ export async function parseSpreadsheetFile(file) {
           let idVal = idColIndex < row.length ? String(row[idColIndex] || '').trim() : '';
           let nameVal = nameColIndex < row.length ? String(row[nameColIndex] || '').trim() : '';
 
-          // If there's only 1 column populated, check if it contains "ID, Name" or just Name
           if (!nameVal && idVal) {
             const parsed = parseSingleLine(idVal);
             if (parsed.fullName) {
@@ -161,11 +310,174 @@ export async function parseSpreadsheetFile(file) {
 }
 
 /**
- * Parses raw pasted multiline text
- * Handles:
- * 1) "Jane Doe" (one name per line)
- * 2) "2024-001, Jane Doe" (ID and Name separated by comma, tab, or dash)
- * 3) "2024-001\tJane Doe" (tab from Excel copy)
+ * Parses an uploaded Google Meet Tracker export file (.xlsx, .xls, .csv).
+ * Inspects all columns, detects the most probable participant-name column,
+ * extracts preview rows, and lets user select or override the participant column if needed.
+ */
+export async function parseMeetAttendanceFile(file) {
+  return new Promise((resolve, reject) => {
+    if (!file) {
+      reject(new Error('No file provided'));
+      return;
+    }
+
+    const reader = new FileReader();
+
+    reader.onload = (e) => {
+      try {
+        const data = new Uint8Array(e.target.result);
+        const workbook = XLSX.read(data, { type: 'array' });
+
+        if (!workbook || !workbook.SheetNames || workbook.SheetNames.length === 0) {
+          reject(new Error('The spreadsheet workbook is empty or has no readable sheets.'));
+          return;
+        }
+
+        const firstSheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[firstSheetName];
+        const rawRows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
+
+        if (!rawRows || rawRows.length === 0) {
+          reject(new Error('The uploaded file contains no data rows.'));
+          return;
+        }
+
+        // Filter out completely blank rows
+        const nonEmptyRows = rawRows.filter(row => Array.isArray(row) && row.some(cell => String(cell).trim() !== ''));
+
+        if (nonEmptyRows.length === 0) {
+          reject(new Error('All rows in the spreadsheet are blank or empty.'));
+          return;
+        }
+
+        // Find best header row (scan first 10 rows)
+        let headerRowIndex = 0;
+        let bestHeaderScore = -1;
+
+        const headerKeywords = [
+          'name', 'participant', 'attendee', 'student', 'full name', 
+          'display name', 'email', 'duration', 'time', 'first name', 'last name'
+        ];
+
+        for (let i = 0; i < Math.min(10, nonEmptyRows.length); i++) {
+          const row = nonEmptyRows[i];
+          let score = 0;
+          row.forEach(cell => {
+            const str = String(cell).trim().toLowerCase();
+            headerKeywords.forEach(kw => {
+              if (str.includes(kw)) score += 2;
+            });
+          });
+          if (score > bestHeaderScore) {
+            bestHeaderScore = score;
+            headerRowIndex = i;
+          }
+        }
+
+        // Extract column headers
+        const headerRow = nonEmptyRows[headerRowIndex] || [];
+        const maxCols = Math.max(...nonEmptyRows.map(r => r.length));
+        const columns = [];
+
+        for (let c = 0; c < maxCols; c++) {
+          const headerName = String(headerRow[c] || '').trim();
+          columns.push({
+            index: c,
+            label: headerName || `Column ${c + 1}`,
+            isAutoName: !headerName,
+          });
+        }
+
+        // Detect candidate columns
+        let candidateNameCol = -1;
+        let candidateEmailCol = -1;
+        let candidateDurationCol = -1;
+
+        // Pass 1: exact keywords
+        columns.forEach(col => {
+          const lower = col.label.toLowerCase();
+          if (candidateNameCol === -1) {
+            if (lower === 'name' || lower === 'full name' || lower === 'participant' || lower === 'attendee' || lower === 'student name' || lower === 'participant name') {
+              candidateNameCol = col.index;
+            }
+          }
+          if (candidateEmailCol === -1) {
+            if (lower.includes('email') || lower.includes('mail')) {
+              candidateEmailCol = col.index;
+            }
+          }
+          if (candidateDurationCol === -1) {
+            if (lower.includes('duration') || lower.includes('time in call') || lower.includes('time') || lower.includes('attendance')) {
+              candidateDurationCol = col.index;
+            }
+          }
+        });
+
+        // Pass 2: fallback contains 'name'
+        if (candidateNameCol === -1) {
+          const nameCol = columns.find(col => col.label.toLowerCase().includes('name') && !col.label.toLowerCase().includes('file'));
+          if (nameCol) candidateNameCol = nameCol.index;
+        }
+
+        // Pass 3: default to first column with non-empty text
+        if (candidateNameCol === -1 && columns.length > 0) {
+          candidateNameCol = 0;
+        }
+
+        // Data rows start after header row
+        const dataRows = nonEmptyRows.slice(headerRowIndex + 1);
+
+        resolve({
+          filename: file.name,
+          totalRows: nonEmptyRows.length,
+          headerRowIndex,
+          columns,
+          detectedNameColIndex: candidateNameCol,
+          detectedEmailColIndex: candidateEmailCol,
+          detectedDurationColIndex: candidateDurationCol,
+          dataRows,
+          previewRows: dataRows.slice(0, 5),
+        });
+      } catch (err) {
+        reject(new Error(`Failed to parse file: ${err.message}`));
+      }
+    };
+
+    reader.onerror = () => reject(new Error('Could not read the uploaded file.'));
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+/**
+ * Extracts participant objects from parsed rows using chosen column indices
+ */
+export function extractParticipantsFromRows(dataRows = [], nameColIndex = 0, emailColIndex = -1, durationColIndex = -1) {
+  const participants = [];
+
+  dataRows.forEach((row, idx) => {
+    if (!Array.isArray(row)) return;
+
+    const rawName = nameColIndex >= 0 && nameColIndex < row.length ? String(row[nameColIndex] || '').trim() : '';
+    if (!rawName) return;
+
+    const email = emailColIndex >= 0 && emailColIndex < row.length ? String(row[emailColIndex] || '').trim() : '';
+    const duration = durationColIndex >= 0 && durationColIndex < row.length ? String(row[durationColIndex] || '').trim() : '';
+
+    participants.push({
+      id: `part-${idx}-${Math.random().toString(36).substring(2, 6)}`,
+      name: rawName,
+      email,
+      duration,
+      rowNumber: idx + 1,
+      rawRow: row,
+    });
+  });
+
+  return participants;
+}
+
+/**
+ * Parses raw pasted multiline text for student rosters
  */
 export function parseBulkText(text, nextSequenceStart = 1) {
   if (!text || typeof text !== 'string') return [];
@@ -210,7 +522,6 @@ function parseSingleLine(line) {
   if (trimmed.includes('\t')) {
     const parts = trimmed.split('\t').map(p => p.trim()).filter(Boolean);
     if (parts.length >= 2) {
-      // Determine which part looks more like an ID
       if (looksLikeId(parts[0])) {
         return { studentId: parts[0], fullName: parts.slice(1).join(' ') };
       } else if (looksLikeId(parts[parts.length - 1])) {
@@ -220,15 +531,13 @@ function parseSingleLine(line) {
     }
   }
 
-  // Try comma separation: "2024-001, John Doe" or "Doe, John" (watch out for Lastname, Firstname!)
-  // If format is "2024-001, John Doe" (first part looks like ID)
+  // Try comma separation
   if (trimmed.includes(',')) {
     const parts = trimmed.split(',').map(p => p.trim()).filter(Boolean);
     if (parts.length >= 2) {
       if (looksLikeId(parts[0])) {
         return { studentId: parts[0], fullName: parts.slice(1).join(', ') };
       }
-      // If it's "Dela Cruz, Juan" without an ID
       if (!looksLikeId(parts[0]) && !looksLikeId(parts[1])) {
         return { studentId: '', fullName: trimmed };
       }
@@ -236,7 +545,7 @@ function parseSingleLine(line) {
   }
 
   // Try hyphen / en-dash separation: "2024-001 - John Doe"
-  const dashMatch = trimmed.match(/^([A-Za-z0-9\-_/]+)\s*[-–—]\s*(.+)$/);
+  const dashMatch = trimmed.match(/^([A-Za-z0-9_-]+)\s*[-–—]\s*(.+)$/);
   if (dashMatch && looksLikeId(dashMatch[1])) {
     return {
       studentId: dashMatch[1].trim(),
@@ -259,12 +568,8 @@ function parseSingleLine(line) {
   };
 }
 
-/**
- * Checks if a string looks like a student ID (contains numbers, dashes, standard ID pattern)
- */
 function looksLikeId(str) {
   if (!str) return false;
-  // If it contains at least 2 digits and is shorter than 20 chars
   const digitCount = (str.match(/\d/g) || []).length;
   return digitCount >= 2 && str.length <= 25 && !str.includes(' ');
 }

@@ -4,6 +4,7 @@ import {
   LayoutDashboard, 
   GraduationCap, 
   Users, 
+  CalendarCheck2,
   Settings,
   Plus, 
   Sparkles 
@@ -14,10 +15,13 @@ export default function Navbar({
   setCurrentView,
   classesCount = 0,
   studentsCount = 0,
+  sessionsCount = 0,
   onOpenCreateClass,
   onLoadSampleData,
   hasData = false,
 }) {
+  const isAttendanceActive = currentView === 'attendance' || currentView === 'session-detail';
+
   return (
     <header className="navbar">
       <div className="navbar-container">
@@ -90,6 +94,28 @@ export default function Navbar({
                 }}
               >
                 {studentsCount}
+              </span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            className={`nav-tab-btn ${isAttendanceActive ? 'active' : ''}`}
+            onClick={() => setCurrentView('attendance')}
+          >
+            <CalendarCheck2 size={18} />
+            <span>Attendance</span>
+            {sessionsCount > 0 && (
+              <span 
+                style={{
+                  fontSize: '0.75rem',
+                  padding: '2px 7px',
+                  borderRadius: '10px',
+                  backgroundColor: isAttendanceActive ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.15)',
+                  fontWeight: '700'
+                }}
+              >
+                {sessionsCount}
               </span>
             )}
           </button>

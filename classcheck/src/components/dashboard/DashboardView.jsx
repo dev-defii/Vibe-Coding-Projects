@@ -82,9 +82,10 @@ export default function DashboardView({
         <StatCard
           label="Attendance Sessions"
           value={totalSessions}
-          helper="Attendance tracking ready for Milestone 2"
+          helper={totalSessions === 1 ? '1 session recorded' : `${totalSessions} sessions recorded`}
           icon={CalendarCheck2}
           variant="green"
+          onClick={() => onNavigate('attendance')}
         />
       </div>
 
@@ -106,23 +107,34 @@ export default function DashboardView({
       >
         <div style={{ maxWidth: '640px' }}>
           <h2 style={{ color: 'var(--white)', fontSize: '1.3rem', fontWeight: 700, marginBottom: '6px' }}>
-            Quick Start: Manage Class Rosters
+            Attendance & Roster Tracking Suite
           </h2>
           <p style={{ color: 'var(--blue-100)', fontSize: '0.95rem', lineHeight: '1.5' }}>
-            Add your subjects and sections, then import or paste student names in bulk. Data saves automatically in your browser.
+            Record meeting dates, import Google Meet attendance tracker exports (.xlsx, .csv), and review student attendance.
           </p>
         </div>
         <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
           {totalClasses > 0 && (
-            <button
-              type="button"
-              className="btn btn-secondary"
-              style={{ backgroundColor: 'var(--white)', color: 'var(--navy-900)' }}
-              onClick={() => onOpenBulkAdd(classes[0].id)}
-            >
-              <FileSpreadsheet size={18} color="var(--blue-600)" />
-              <span>Bulk Paste / Import</span>
-            </button>
+            <>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                style={{ backgroundColor: 'var(--white)', color: 'var(--navy-900)' }}
+                onClick={() => onNavigate('attendance')}
+              >
+                <CalendarCheck2 size={18} color="var(--success-600)" />
+                <span>Attendance Sessions</span>
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                style={{ backgroundColor: 'rgba(255,255,255,0.15)', color: 'var(--white)', borderColor: 'rgba(255,255,255,0.25)' }}
+                onClick={() => onOpenBulkAdd(classes[0].id)}
+              >
+                <FileSpreadsheet size={18} color="var(--blue-100)" />
+                <span>Bulk Roster Import</span>
+              </button>
+            </>
           )}
           {totalClasses === 0 && (
             <button

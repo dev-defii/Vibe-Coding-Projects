@@ -67,6 +67,45 @@ export function normalizeStudentName(name) {
   return name.trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
+export const SAMPLE_SESSIONS = [
+  {
+    id: 'session-sample-1',
+    classId: 'cls-sample-1',
+    title: 'Lecture 4: Binary Trees & Traversals',
+    subject: 'CS 201',
+    date: new Date(Date.now() - 2 * 86400000).toISOString().split('T')[0],
+    status: 'in_review',
+    createdAt: new Date(Date.now() - 2 * 86400000).toISOString(),
+    updatedAt: new Date(Date.now() - 2 * 86400000).toISOString(),
+    records: [
+      { studentId: '2024-00101', studentInternalId: 'stu-s1-1', studentName: 'Alonzo, Sofia Marie', status: 'present', matchType: 'exact', matchedParticipantName: 'Sofia Marie Alonzo', notes: 'Matched from Meet' },
+      { studentId: '2024-00102', studentInternalId: 'stu-s1-2', studentName: 'Bernardo, Gabriel Luis', status: 'present', matchType: 'exact', matchedParticipantName: 'Gabriel Luis Bernardo', notes: 'Matched from Meet' },
+      { studentId: '2024-00103', studentInternalId: 'stu-s1-3', studentName: 'Castillo, Andrea Camille', status: 'present', matchType: 'inverted_exact', matchedParticipantName: 'Andrea Camille Castillo', notes: 'Matched from Meet' },
+      { studentId: '2024-00104', studentInternalId: 'stu-s1-4', studentName: 'Dela Cruz, Marcus John', status: 'present', matchType: 'exact', matchedParticipantName: 'Marcus John Dela Cruz', notes: 'Matched (joined 2x in call log)' },
+      { studentId: '2024-00105', studentInternalId: 'stu-s1-5', studentName: 'Espiritu, Hannah Beatriz', status: 'present', matchType: 'exact', matchedParticipantName: 'Hannah Beatriz Espiritu', notes: 'Matched from Meet' },
+      { studentId: '2024-00106', studentInternalId: 'stu-s1-6', studentName: 'Flores, Rafael Antonio', status: 'present', matchType: 'exact', matchedParticipantName: 'Rafael Antonio Flores', notes: 'Matched from Meet' },
+      { studentId: '2024-00107', studentInternalId: 'stu-s1-7', studentName: 'Garcia, Patricia Mae', status: 'unreviewed', matchType: 'none', matchedParticipantName: '', notes: 'Not found in Meet import' },
+      { studentId: '2024-00108', studentInternalId: 'stu-s1-8', studentName: 'Hernandez, Christian Kyle', status: 'unreviewed', matchType: 'none', matchedParticipantName: '', notes: 'Not found in Meet import' },
+    ],
+    unmatchedParticipants: [
+      {
+        originalName: 'Alex Ramos (Guest Attendee)',
+        normalizedName: 'alex ramos (guest attendee)',
+        count: 1,
+        duration: '42 mins',
+        email: 'alex.ramos@gmail.com',
+        suggestions: []
+      }
+    ],
+    importMetadata: {
+      filename: 'meet_attendance_cs201_oct09.csv',
+      importedAt: new Date(Date.now() - 2 * 86400000).toISOString(),
+      totalParticipants: 7,
+      duplicatesMerged: 1
+    }
+  }
+];
+
 export const storageService = {
   // Check if first-time user
   hasVisitedBefore() {
@@ -118,7 +157,7 @@ export const storageService = {
     }
   },
 
-  // Attendance sessions (stubbed for milestone 1 & ready for milestone 2)
+  // Attendance sessions
   getSessions() {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.SESSIONS);
@@ -142,12 +181,12 @@ export const storageService = {
   loadSampleData() {
     this.saveClasses(SAMPLE_CLASSES);
     this.saveStudents(SAMPLE_STUDENTS);
-    this.saveSessions([]);
+    this.saveSessions(SAMPLE_SESSIONS);
     this.markVisited();
     return {
       classes: SAMPLE_CLASSES,
       students: SAMPLE_STUDENTS,
-      sessions: [],
+      sessions: SAMPLE_SESSIONS,
     };
   },
 
