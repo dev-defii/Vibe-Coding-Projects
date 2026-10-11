@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X, UserPlus, AlertCircle } from 'lucide-react';
+import { normalizeStudentName } from '../../services/storageService.js';
 
 export default function StudentModal({
   isOpen,
@@ -37,7 +38,7 @@ export default function StudentModal({
       const isDuplicate = existingStudents.some(
         (s) =>
           s.classId === currentClass?.id &&
-          s.studentId.toLowerCase() === trimmedId.toLowerCase() &&
+          s.studentId.trim().toLowerCase() === trimmedId.toLowerCase() &&
           (!editingStudent || s.id !== editingStudent.id)
       );
       if (isDuplicate) {
@@ -47,6 +48,18 @@ export default function StudentModal({
 
     if (!trimmedName) {
       errs.fullName = 'Student full name is required (e.g., Dela Cruz, Juan)';
+    } else {
+      const normalizedName = normalizeStudentName(trimmedName);
+      // Check for duplicate Name in the same class (unless we are editing the same student)
+      const isDuplicateName = existingStudents.some(
+        (s) =>
+          s.classId === currentClass?.id &&
+          normalizeStudentName(s.fullName) === normalizedName &&
+          (!editingStudent || s.id !== editingStudent.id)
+      );
+      if (isDuplicateName) {
+        errs.fullName = `A student named "${trimmedName}" is already enrolled in this class.`;
+      }
     }
 
     setErrors(errs);

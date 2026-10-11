@@ -9,6 +9,7 @@ import {
   Info
 } from 'lucide-react';
 import { parseBulkText, parseSpreadsheetFile } from '../../services/spreadsheetService.js';
+import { normalizeStudentName } from '../../services/storageService.js';
 
 export default function BulkStudentModal({
   isOpen,
@@ -25,23 +26,36 @@ export default function BulkStudentModal({
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef(null);
 
-  // Existing student IDs set for quick duplicate checking
-  const existingIdSet = useMemo(() => {
-    return new Set(
-      existingStudents
-        .filter((s) => s.classId === currentClass?.id)
-        .map((s) => s.studentId.trim().toLowerCase())
-    );
+  // Existing students in this class
+  const existingClassStudents = useMemo(() => {
+    return existingStudents.filter((s) => s.classId === currentClass?.id);
   }, [existingStudents, currentClass]);
+
+  // Map of normalized existing IDs to student full name
+  const existingIdMap = useMemo(() => {
+    const map = new Map();
+    existingClassStudents.forEach((s) => {
+      map.set(s.studentId.trim().toLowerCase(), s.fullName);
+    });
+    return map;
+  }, [existingClassStudents]);
+
+  // Map of normalized existing Names to student object
+  const existingNameMap = useMemo(() => {
+    const map = new Map();
+    existingClassStudents.forEach((s) => {
+      map.set(normalizeStudentName(s.fullName), s);
+    });
+    return map;
+  }, [existingClassStudents]);
 
   // Determine starting sequence number for auto-generated IDs
   const startingSeq = useMemo(() => {
-    const classCount = existingStudents.filter((s) => s.classId === currentClass?.id).length;
-    return classCount + 1;
-  }, [existingStudents, currentClass]);
+    return existingClassStudents.length + 1;
+  }, [existingClassStudents]);
 
-  // Derive parsed students for the 'paste' tab directly during render
-  const textParsedStudents = useMemo(() => {
+  // Raw parsed items for paste tab
+  const rawTextParsed = useMemo(() => {
     if (!rawText.trim()) return [];
     const parsed = parseBulkText(rawText, startingSeq);
     return parsed.map((item, idx) => {
@@ -50,21 +64,83 @@ export default function BulkStudentModal({
         finalId = `${idPrefix}${String(startingSeq + idx).padStart(3, '0')}`;
       }
       return {
-        ...item,
         studentId: finalId,
-        isDuplicate: existingIdSet.has(finalId.toLowerCase()),
+        fullName: item.fullName,
       };
     });
-  }, [rawText, idPrefix, startingSeq, existingIdSet]);
+  }, [rawText, idPrefix, startingSeq]);
 
-  // Active student list based on current tab
-  const activeStudentList = useMemo(() => {
-    if (activeTab === 'paste') return textParsedStudents;
-    return fileParsedStudents.map((item) => ({
-      ...item,
-      isDuplicate: existingIdSet.has(item.studentId.toLowerCase()),
-    }));
-  }, [activeTab, textParsedStudents, fileParsedStudents, existingIdSet]);
+  // Choose source list based on active tab
+  const rawList = activeTab === 'paste' ? rawTextParsed : fileParsedStudents;
+
+  // Validate entire list for duplicate IDs and duplicate Names (both against existing roster and within the batch)
+  const validatedStudentList = useMemo(() => {
+    if (!rawList || rawList.length === 0) return [];
+
+    // Frequency counts across the new batch
+    const batchIdCounts = new Map();
+    const batchNameCounts = new Map();
+
+    rawList.forEach((item) => {
+      const normId = item.studentId ? item.studentId.trim().toLowerCase() : '';
+      const normName = normalizeStudentName(item.fullName);
+      if (normId) {
+        batchIdCounts.set(normId, (batchIdCounts.get(normId) || 0) + 1);
+      }
+      if (normName) {
+        batchNameCounts.set(normName, (batchNameCounts.get(normName) || 0) + 1);
+      }
+    });
+
+    return rawList.map((item, index) => {
+      const trimmedName = item.fullName ? item.fullName.trim() : '';
+      const trimmedId = item.studentId ? item.studentId.trim() : '';
+      const normId = trimmedId.toLowerCase();
+      const normName = normalizeStudentName(trimmedName);
+
+      const errors = [];
+
+      if (!trimmedName) {
+        errors.push('Student name is required');
+      }
+
+      if (!trimmedId) {
+        errors.push('Student ID is required');
+      }
+
+      // Check ID duplicates
+      if (normId) {
+        if (existingIdMap.has(normId)) {
+          errors.push(`ID "${trimmedId}" is already assigned to ${existingIdMap.get(normId)} in this class`);
+        } else if (batchIdCounts.get(normId) > 1) {
+          errors.push(`ID "${trimmedId}" is repeated ${batchIdCounts.get(normId)} times in this import`);
+        }
+      }
+
+      // Check Name duplicates
+      if (normName) {
+        if (existingNameMap.has(normName)) {
+          errors.push(`"${trimmedName}" is already enrolled in this class (ID: ${existingNameMap.get(normName).studentId})`);
+        } else if (batchNameCounts.get(normName) > 1) {
+          errors.push(`"${trimmedName}" appears ${batchNameCounts.get(normName)} times in this import`);
+        }
+      }
+
+      return {
+        ...item,
+        index,
+        studentId: trimmedId,
+        fullName: trimmedName,
+        isValid: errors.length === 0,
+        errors,
+      };
+    });
+  }, [rawList, existingIdMap, existingNameMap]);
+
+  // Total rows with duplicate/validation errors
+  const invalidRowsCount = useMemo(() => {
+    return validatedStudentList.filter((item) => !item.isValid).length;
+  }, [validatedStudentList]);
 
   // Handle escape key
   useEffect(() => {
@@ -97,7 +173,7 @@ export default function BulkStudentModal({
         }
         return {
           studentId: finalId,
-          fullName: item.fullName.trim(),
+          fullName: item.fullName ? item.fullName.trim() : '',
         };
       });
 
@@ -118,26 +194,20 @@ export default function BulkStudentModal({
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (activeStudentList.length === 0) return;
+    if (validatedStudentList.length === 0 || invalidRowsCount > 0) return;
 
-    // Filter out invalid items (must have name)
-    const validStudents = activeStudentList
-      .filter((item) => item.fullName.trim().length > 0)
-      .map((item) => ({
-        id: `stu-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-        classId: currentClass.id,
-        studentId: item.studentId.trim(),
-        fullName: item.fullName.trim(),
-        createdAt: new Date().toISOString(),
-      }));
-
-    if (validStudents.length === 0) return;
+    // Map valid items for saving
+    const validStudents = validatedStudentList.map((item) => ({
+      id: `stu-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      classId: currentClass.id,
+      studentId: item.studentId,
+      fullName: item.fullName,
+      createdAt: new Date().toISOString(),
+    }));
 
     onSaveBulk(validStudents);
     onClose();
   };
-
-  const duplicateCount = activeStudentList.filter((item) => item.isDuplicate).length;
 
   return (
     <div className="modal-backdrop" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="bulk-modal-title">
@@ -199,7 +269,7 @@ export default function BulkStudentModal({
                   <div>
                     <strong>Paste instructions:</strong> Paste multiple student names, one per line.
                     <ul style={{ margin: '6px 0 0 16px', padding: 0 }}>
-                      <li><strong>Names only:</strong> Type or paste one name per line (e.g. <code>Maria Santos</code>). IDs will be generated automatically.</li>
+                      <li><strong>Names only:</strong> Type or paste one name per line (e.g. <code>Maria Santos</code>). IDs are generated automatically.</li>
                       <li><strong>With ID:</strong> Paste lines like <code>2024-001, Maria Santos</code> or copy two columns directly from an Excel sheet.</li>
                     </ul>
                   </div>
@@ -225,14 +295,14 @@ export default function BulkStudentModal({
                   </div>
                 </div>
 
-                <div className="form-group" style={{ marginBottom: '12px' }}>
+                <div className="form-group" style={{ marginBottom: '16px' }}>
                   <label htmlFor="bulk-textarea" className="form-label">
                     Paste Student Roster (One entry per line):
                   </label>
                   <textarea
                     id="bulk-textarea"
                     className="form-textarea"
-                    rows={7}
+                    rows={6}
                     placeholder={`Example 1 (Names only):\nSantos, Maria Clara\nDela Cruz, Juan\nAquino, Jeremiah Vance\n\nExample 2 (ID and Name):\n2024-00101, Alonzo, Sofia Marie\n2024-00102, Bernardo, Gabriel Luis`}
                     value={rawText}
                     onChange={(e) => setRawText(e.target.value)}
@@ -249,7 +319,7 @@ export default function BulkStudentModal({
                   <Info size={20} className="info-box-icon" />
                   <div>
                     <strong>Spreadsheet file support:</strong> Upload an <code>.xlsx</code>, <code>.xls</code>, or <code>.csv</code> file.
-                    Columns labeled <em>Student ID</em> and <em>Full Name</em> (or column 1 and 2) will be parsed automatically.
+                    Columns labeled <em>Student ID</em> and <em>Full Name</em> (or columns 1 and 2) will be parsed automatically.
                   </div>
                 </div>
 
@@ -277,6 +347,7 @@ export default function BulkStudentModal({
                   role="button"
                   tabIndex={0}
                   onKeyDown={(e) => e.key === 'Enter' && fileInputRef.current?.click()}
+                  style={{ marginBottom: '16px' }}
                 >
                   <div style={{ color: 'var(--blue-600)', background: 'var(--blue-50)', padding: '12px', borderRadius: '50%' }}>
                     <Upload size={32} />
@@ -292,7 +363,7 @@ export default function BulkStudentModal({
                 </div>
 
                 {fileError && (
-                  <div className="form-error" style={{ marginTop: '12px', fontSize: '0.9rem' }}>
+                  <div className="form-error" style={{ marginBottom: '16px', fontSize: '0.9rem' }}>
                     <AlertCircle size={16} style={{ display: 'inline', marginRight: 6, verticalAlign: -2 }} />
                     {fileError}
                   </div>
@@ -300,48 +371,88 @@ export default function BulkStudentModal({
               </div>
             )}
 
-            {/* Parsed Preview Table */}
-            {activeStudentList.length > 0 && (
+            {/* Parsed Preview Table & Duplicate Diagnostics */}
+            {validatedStudentList.length > 0 && (
               <div>
-                <div className="preview-summary">
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <CheckCircle2 size={18} color="var(--success-600)" />
-                    <span>
-                      Detected <strong>{activeStudentList.length}</strong> student {activeStudentList.length === 1 ? 'entry' : 'entries'} ready to enroll:
-                    </span>
+                {/* Warning Banner if Duplicates or Errors Exist */}
+                {invalidRowsCount > 0 ? (
+                  <div 
+                    className="info-box" 
+                    style={{ 
+                      backgroundColor: 'var(--danger-50)', 
+                      borderColor: 'var(--danger-border)', 
+                      color: 'var(--danger-700)',
+                      marginBottom: '14px'
+                    }}
+                  >
+                    <AlertCircle size={22} className="info-box-icon" style={{ color: 'var(--danger-600)' }} />
+                    <div>
+                      <strong>Duplicate or validation issues detected ({invalidRowsCount} row{invalidRowsCount === 1 ? '' : 's'}):</strong>
+                      <div style={{ marginTop: '4px', fontSize: '0.85rem', color: 'var(--danger-700)' }}>
+                        Students with duplicate names or IDs cannot be enrolled. Please correct the duplicate rows highlighted in red below before importing.
+                      </div>
+                    </div>
                   </div>
-                  {duplicateCount > 0 && (
-                    <span style={{ color: 'var(--warning-700)', fontSize: '0.85rem', fontWeight: 600 }}>
-                      ⚠️ {duplicateCount} ID(s) already exist in roster
-                    </span>
-                  )}
-                </div>
+                ) : (
+                  <div className="preview-summary" style={{ marginBottom: '10px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <CheckCircle2 size={18} color="var(--success-600)" />
+                      <span>
+                        All <strong>{validatedStudentList.length}</strong> student {validatedStudentList.length === 1 ? 'entry is' : 'entries are'} valid and ready to enroll:
+                      </span>
+                    </div>
+                  </div>
+                )}
 
                 <div className="bulk-preview-container">
                   <table className="table" style={{ fontSize: '0.88rem' }}>
                     <thead>
                       <tr>
                         <th style={{ width: '40px' }}>#</th>
-                        <th style={{ width: '140px' }}>Student ID</th>
+                        <th style={{ width: '130px' }}>Student ID</th>
                         <th>Full Name</th>
-                        <th style={{ width: '90px' }}>Status</th>
+                        <th style={{ width: '140px' }}>Validation Status</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {activeStudentList.map((item, idx) => (
-                        <tr key={idx} style={{ backgroundColor: item.isDuplicate ? 'var(--warning-50)' : 'transparent' }}>
-                          <td>{idx + 1}</td>
-                          <td>
-                            <span className="student-id-badge">{item.studentId}</span>
+                      {validatedStudentList.map((item, idx) => (
+                        <tr 
+                          key={idx} 
+                          style={{ 
+                            backgroundColor: !item.isValid ? 'var(--danger-50)' : 'transparent' 
+                          }}
+                        >
+                          <td style={{ verticalAlign: 'top', paddingTop: '12px' }}>{idx + 1}</td>
+                          <td style={{ verticalAlign: 'top', paddingTop: '12px' }}>
+                            <span className="student-id-badge">{item.studentId || '—'}</span>
                           </td>
-                          <td style={{ fontWeight: 600 }}>{item.fullName}</td>
-                          <td>
-                            {item.isDuplicate ? (
-                              <span className="badge" style={{ backgroundColor: '#fed7aa', color: '#9a3412', fontSize: '0.72rem' }}>
-                                Duplicate
+                          <td style={{ verticalAlign: 'top', paddingTop: '12px' }}>
+                            <div style={{ fontWeight: 600, color: !item.isValid ? 'var(--danger-700)' : 'var(--slate-900)' }}>
+                              {item.fullName || '—'}
+                            </div>
+                            {!item.isValid && item.errors.length > 0 && (
+                              <ul style={{ margin: '4px 0 0 16px', padding: 0, fontSize: '0.78rem', color: 'var(--danger-600)' }}>
+                                {item.errors.map((err, eIdx) => (
+                                  <li key={eIdx}>{err}</li>
+                                ))}
+                              </ul>
+                            )}
+                          </td>
+                          <td style={{ verticalAlign: 'top', paddingTop: '12px' }}>
+                            {!item.isValid ? (
+                              <span 
+                                className="badge" 
+                                style={{ 
+                                  backgroundColor: '#fee2e2', 
+                                  color: 'var(--danger-700)', 
+                                  border: '1px solid var(--danger-border)',
+                                  fontSize: '0.74rem' 
+                                }}
+                              >
+                                Needs Fix
                               </span>
                             ) : (
-                              <span className="badge badge-green" style={{ fontSize: '0.72rem' }}>
+                              <span className="badge badge-green" style={{ fontSize: '0.74rem' }}>
                                 Valid
                               </span>
                             )}
@@ -362,13 +473,15 @@ export default function BulkStudentModal({
             <button
               type="submit"
               className="btn btn-primary"
-              disabled={activeStudentList.length === 0}
+              disabled={validatedStudentList.length === 0 || invalidRowsCount > 0}
             >
               <CheckCircle2 size={18} />
               <span>
-                {activeStudentList.length === 0
-                  ? 'Add Students'
-                  : `Add ${activeStudentList.length} ${activeStudentList.length === 1 ? 'Student' : 'Students'} to Roster`}
+                {invalidRowsCount > 0
+                  ? `Fix ${invalidRowsCount} Duplicate Issue${invalidRowsCount === 1 ? '' : 's'} to Proceed`
+                  : validatedStudentList.length === 0
+                  ? 'Add Students to Roster'
+                  : `Add ${validatedStudentList.length} ${validatedStudentList.length === 1 ? 'Student' : 'Students'} to Roster`}
               </span>
             </button>
           </div>

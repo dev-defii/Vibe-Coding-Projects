@@ -57,6 +57,15 @@ export const SAMPLE_STUDENTS = [
   { id: 'stu-s3-3', classId: 'cls-sample-3', studentId: '2023-01047', fullName: 'Cabrera, Vincent Patrick', createdAt: new Date().toISOString() },
   { id: 'stu-s3-4', classId: 'cls-sample-3', studentId: '2023-01048', fullName: 'Diaz, Samantha Nicole', createdAt: new Date().toISOString() },
 ];
+/**
+ * Normalizes a student full name for comparison:
+ * Trims leading/trailing whitespace, collapses internal whitespace, and converts to lowercase.
+ * Example: "  Juan   Dela   Cruz  " -> "juan dela cruz"
+ */
+export function normalizeStudentName(name) {
+  if (!name || typeof name !== 'string') return '';
+  return name.trim().replace(/\s+/g, ' ').toLowerCase();
+}
 
 export const storageService = {
   // Check if first-time user

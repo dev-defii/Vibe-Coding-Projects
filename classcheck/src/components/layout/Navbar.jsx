@@ -4,9 +4,9 @@ import {
   LayoutDashboard, 
   GraduationCap, 
   Users, 
+  Settings,
   Plus, 
-  Sparkles,
-  RotateCcw
+  Sparkles 
 } from 'lucide-react';
 
 export default function Navbar({
@@ -16,7 +16,6 @@ export default function Navbar({
   studentsCount = 0,
   onOpenCreateClass,
   onLoadSampleData,
-  onClearAllData,
   hasData = false,
 }) {
   return (
@@ -94,11 +93,20 @@ export default function Navbar({
               </span>
             )}
           </button>
+
+          <button
+            type="button"
+            className={`nav-tab-btn ${currentView === 'settings' ? 'active' : ''}`}
+            onClick={() => setCurrentView('settings')}
+          >
+            <Settings size={18} />
+            <span>Settings</span>
+          </button>
         </nav>
 
         {/* Quick Actions */}
         <div className="nav-actions">
-          {!hasData ? (
+          {!hasData && (
             <button
               type="button"
               className="btn btn-sm btn-secondary"
@@ -108,17 +116,6 @@ export default function Navbar({
             >
               <Sparkles size={16} color="var(--blue-600)" />
               <span>Load Sample Data</span>
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="btn btn-sm btn-secondary"
-              onClick={onClearAllData}
-              title="Reset or remove all saved data"
-              style={{ color: 'var(--slate-700)', fontSize: '0.82rem', padding: '6px 12px' }}
-            >
-              <RotateCcw size={14} />
-              <span>Reset Data</span>
             </button>
           )}
 

@@ -7,9 +7,10 @@ import ClassModal from './components/classes/ClassModal.jsx';
 import StudentRoster from './components/students/StudentRoster.jsx';
 import StudentModal from './components/students/StudentModal.jsx';
 import BulkStudentModal from './components/students/BulkStudentModal.jsx';
+import SettingsView from './components/settings/SettingsView.jsx';
 import ConfirmModal from './components/common/ConfirmModal.jsx';
 import Toast from './components/common/Toast.jsx';
-import { storageService } from './services/storageService.js';
+import { storageService, normalizeStudentName } from './services/storageService.js';
 
 export default function App() {
   // Core state from localStorage
@@ -17,7 +18,7 @@ export default function App() {
   const [students, setStudents] = useState(() => storageService.getStudents());
   const [sessions, setSessions] = useState(() => storageService.getSessions());
 
-  // Navigation view: 'dashboard' | 'classes' | 'students'
+  // Navigation view: 'dashboard' | 'classes' | 'students' | 'settings'
   const [currentView, setCurrentView] = useState('dashboard');
 
   // Currently focused class for Student Roster view
@@ -44,6 +45,7 @@ export default function App() {
     message: '',
     confirmText: 'Delete',
     confirmVariant: 'danger',
+    requireTypedText: '',
     onConfirm: () => {},
   });
 
@@ -120,6 +122,7 @@ export default function App() {
           : `Are you sure you want to delete "${classItem.name}"? This action cannot be undone.`,
       confirmText: 'Delete Class',
       confirmVariant: 'danger',
+      requireTypedText: '',
       onConfirm: () => {
         setClasses((prev) => prev.filter((c) => c.id !== classItem.id));
         setStudents((prev) => prev.filter((s) => s.classId !== classItem.id));
@@ -149,9 +152,34 @@ export default function App() {
   };
 
   const handleSaveStudent = (savedStudent) => {
+    // Validate duplicate ID within the same class
+    const duplicateId = students.some(
+      (s) =>
+        s.classId === savedStudent.classId &&
+        s.studentId.trim().toLowerCase() === savedStudent.studentId.trim().toLowerCase() &&
+        s.id !== savedStudent.id
+    );
+    if (duplicateId) {
+      showToast(`Student ID "${savedStudent.studentId}" is already used in this class roster.`, 'danger');
+      return;
+    }
+
+    // Validate duplicate Name within the same class (normalized)
+    const normName = normalizeStudentName(savedStudent.fullName);
+    const duplicateName = students.some(
+      (s) =>
+        s.classId === savedStudent.classId &&
+        normalizeStudentName(s.fullName) === normName &&
+        s.id !== savedStudent.id
+    );
+    if (duplicateName) {
+      showToast(`A student named "${savedStudent.fullName}" is already enrolled in this class.`, 'danger');
+      return;
+    }
+
     if (editingStudent) {
       setStudents((prev) =>
-        prev.map((s) => (s.id === savedStudent.id ? savedStudent : c => c))
+        prev.map((s) => (s.id === savedStudent.id ? savedStudent : s))
       );
       showToast(`Student "${savedStudent.fullName}" updated.`, 'success');
     } else {
@@ -170,6 +198,7 @@ export default function App() {
       }?`,
       confirmText: 'Remove Student',
       confirmVariant: 'danger',
+      requireTypedText: '',
       onConfirm: () => {
         setStudents((prev) => prev.filter((s) => s.id !== student.id));
         setConfirmConfig((prev) => ({ ...prev, isOpen: false }));
@@ -191,6 +220,34 @@ export default function App() {
   };
 
   const handleSaveBulkStudents = (newStudents) => {
+    if (!newStudents || newStudents.length === 0) return;
+    const targetClassId = newStudents[0].classId;
+
+    // Consistency check on data layer: ensure no duplicates against class or within new batch
+    const existingClassStudents = students.filter((s) => s.classId === targetClassId);
+    const existingIds = new Set(existingClassStudents.map((s) => s.studentId.trim().toLowerCase()));
+    const existingNames = new Set(existingClassStudents.map((s) => normalizeStudentName(s.fullName)));
+
+    const batchIds = new Set();
+    const batchNames = new Set();
+
+    for (const student of newStudents) {
+      const normId = student.studentId.trim().toLowerCase();
+      const normName = normalizeStudentName(student.fullName);
+
+      if (existingIds.has(normId) || batchIds.has(normId)) {
+        showToast(`Duplicate student ID detected: "${student.studentId}". Import stopped.`, 'danger');
+        return;
+      }
+      if (existingNames.has(normName) || batchNames.has(normName)) {
+        showToast(`Duplicate student name detected: "${student.fullName}". Import stopped.`, 'danger');
+        return;
+      }
+
+      batchIds.add(normId);
+      batchNames.add(normName);
+    }
+
     setStudents((prev) => [...prev, ...newStudents]);
     showToast(`Successfully added ${newStudents.length} students to the roster!`, 'success');
   };
@@ -205,14 +262,14 @@ export default function App() {
     showToast('Loaded 3 sample classes and 17 students.', 'success');
   };
 
-  const handleClearAllData = () => {
+  const handleRequestResetData = () => {
     setConfirmConfig({
       isOpen: true,
-      title: 'Reset All Data?',
-      message:
-        'This will erase all classes and student rosters saved on this device. Use this if you want to start fresh with real college records.',
-      confirmText: 'Reset Everything',
+      title: 'Erase All Application Data?',
+      message: `Resetting will permanently delete all ${classes.length} saved course(s), ${students.length} enrolled student record(s), and attendance sessions from this computer. This action cannot be reversed.`,
+      confirmText: 'Permanently Erase All Data',
       confirmVariant: 'danger',
+      requireTypedText: 'RESET',
       onConfirm: () => {
         const cleared = storageService.clearAllData();
         setClasses(cleared.classes);
@@ -220,7 +277,7 @@ export default function App() {
         setSessions(cleared.sessions);
         setSelectedClassId(null);
         setConfirmConfig((prev) => ({ ...prev, isOpen: false }));
-        showToast('All local data cleared.', 'warning');
+        showToast('All local data has been permanently cleared.', 'warning');
       },
     });
   };
@@ -244,7 +301,6 @@ export default function App() {
         studentsCount={students.length}
         onOpenCreateClass={handleOpenCreateClass}
         onLoadSampleData={handleLoadSampleData}
-        onClearAllData={handleClearAllData}
         hasData={classes.length > 0}
       />
 
@@ -290,6 +346,16 @@ export default function App() {
             onShowToast={showToast}
           />
         )}
+
+        {currentView === 'settings' && (
+          <SettingsView
+            classesCount={classes.length}
+            studentsCount={students.length}
+            sessionsCount={sessions.length}
+            onLoadSampleData={handleLoadSampleData}
+            onRequestResetData={handleRequestResetData}
+          />
+        )}
       </main>
 
       {/* Modals */}
@@ -326,15 +392,19 @@ export default function App() {
         />
       )}
 
-      <ConfirmModal
-        isOpen={confirmConfig.isOpen}
-        title={confirmConfig.title}
-        message={confirmConfig.message}
-        confirmText={confirmConfig.confirmText}
-        confirmVariant={confirmConfig.confirmVariant}
-        onConfirm={confirmConfig.onConfirm}
-        onCancel={() => setConfirmConfig((prev) => ({ ...prev, isOpen: false }))}
-      />
+      {confirmConfig.isOpen && (
+        <ConfirmModal
+          key={confirmConfig.title}
+          isOpen={confirmConfig.isOpen}
+          title={confirmConfig.title}
+          message={confirmConfig.message}
+          confirmText={confirmConfig.confirmText}
+          confirmVariant={confirmConfig.confirmVariant}
+          requireTypedText={confirmConfig.requireTypedText || ''}
+          onConfirm={confirmConfig.onConfirm}
+          onCancel={() => setConfirmConfig((prev) => ({ ...prev, isOpen: false }))}
+        />
+      )}
 
       {/* Toast Notification Container */}
       <Toast toasts={toasts} onDismiss={dismissToast} />
